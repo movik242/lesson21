@@ -1,0 +1,81 @@
+# -*- mode: ruby -*-
+# vim: set ft=ruby :
+
+GLOBAL_VARS = {router_id_enable: true}
+
+MACHINES = {
+  :router1 => {
+    :box_name => "centos",
+    :net => [
+              {ip: '10.0.10.1', adapter: 2, netmask: "255.255.255.252", virtualbox__intnet: "r1-r2"},
+              {ip: '10.0.12.1', adapter: 3, netmask: "255.255.255.252", virtualbox__intnet: "r1-r3"},
+              {ip: '192.168.20.1', adapter: 4, netmask: "255.255.255.0", virtualbox__intnet: "net1"},
+              {ip: '192.168.50.10', adapter: 5}, #ansible
+            ],
+    :vars => {router_id: '4.4.4.4'}
+  },
+  :router2 => {
+    :box_name => "centos",
+    :net => [
+              {ip: '10.0.10.2', adapter: 2, netmask: "255.255.255.252", virtualbox__intnet: "r1-r2"},
+              {ip: '10.0.11.2', adapter: 3, netmask: "255.255.255.252", virtualbox__intnet: "r2-r3"},
+              {ip: '192.168.30.1', adapter: 4, netmask: "255.255.255.0", virtualbox__intnet: "net2"},
+              {ip: '192.168.50.11', adapter: 5}, #ansible
+            ],
+    :vars => {router_id: '2.2.2.2'}
+  },
+  :router3 => {
+    :box_name => "centos",
+    :net => [
+              {ip: '10.0.11.1', adapter: 2, netmask: "255.255.255.252", virtualbox__intnet: "r2-r3"},
+              {ip: '10.0.12.2', adapter: 3, netmask: "255.255.255.252", virtualbox__intnet: "r1-r3"},
+              {ip: '192.168.40.1', adapter: 4, netmask: "255.255.255.0", virtualbox__intnet: "net3"},
+              {ip: '192.168.50.12', adapter: 5}, #ansible
+            ],
+    :vars => {router_id: '3.3.3.3'}
+  },
+}
+
+Vagrant.configure("2") do |config|
+  config.vm.box_check_update = false
+  config.vm.provider :virtualbox
+  MACHINES.each do |boxname, boxconfig|
+    config.vm.define boxname do |box|
+      box.vm.box = boxconfig[:box_name]
+      box.vm.host_name = boxname.to_s
+      boxconfig[:net].each do |ipconf|
+        box.vm.network "private_network", **ipconf
+      end
+      
+      box.vm.provision "shell", inline: <<-SHELL
+          mkdir -p ~root/.ssh
+          cp ~vagrant/.ssh/auth* ~root/.ssh
+		  ln -sf /usr/share/zoneinfo/Europe/Moscow /etc/localtime
+		  sed -i 's/^PasswordAuthentication.*$/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          systemctl restart sshd
+          systemctl stop firewalld
+          systemctl disable firewalld
+          sed -i 's/=enforcing/=disabled/' /etc/selinux/config
+          setenforce 0
+          sudo -i
+          yum install -y wget vim mc tcpdump traceroute net-tools
+          wget https://ci1.netdef.org/artifact/LIBYANG-YANGRELEASE/shared/build-10/CentOS-7-x86_64-Packages/libyang-0.16.111-0.x86_64.rpm  --no-check-certificate
+          yum install libyang-0.16.111-0.x86_64.rpm -y
+          wget https://github.com/FRRouting/frr/releases/download/frr-7.0/frr-7.0-01.el7.centos.x86_64.rpm
+          yum install frr-7.0-01.el7.centos.x86_64.rpm -y
+	  
+      SHELL
+      
+      
+      
+      
+      box.vm.provision "ansible" do |ansible|
+       ansible.compatibility_mode = "2.0"
+       ansible.playbook = boxname.to_s + ".yaml"
+       ansible.extra_vars = GLOBAL_VARS.merge(boxconfig[:vars])
+       ansible.host_key_checking = "false"
+       ansible.limit = "all"
+      end
+    end
+  end
+end
